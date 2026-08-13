@@ -145,6 +145,16 @@
         price: parsePrice(priceRaw),
         salePriceRaw: salePriceRaw,
         salePrice: parsePrice(salePriceRaw),
+        // The price actually charged: the sale price when one is set,
+        // otherwise the regular price. Needed because which of the two
+        // fields is "always populated" is platform-dependent — Shopify
+        // exports typically leave Compare At Price (our "price") blank for
+        // non-sale products and always populate Price (our "salePrice"),
+        // while WooCommerce is the other way around. Checks that care about
+        // "is this product's price valid/sane" should look at whatever the
+        // customer would actually pay, not assume either field is populated.
+        effectivePriceRaw: salePriceRaw !== '' ? salePriceRaw : priceRaw,
+        effectivePrice: salePriceRaw !== '' ? parsePrice(salePriceRaw) : parsePrice(priceRaw),
         imageUrl: get(raw, mapping.imageUrl),
         category: get(raw, mapping.category),
         stockRaw: stockRaw,
@@ -158,13 +168,13 @@
     return ACTIVE_STATUS_VALUES.indexOf(String(status).toLowerCase().trim()) !== -1;
   }
 
-  function computeCategoryMedians(rows, mappedPrice, mappedCategory) {
-    if (!mappedPrice || !mappedCategory) return {};
+  function computeCategoryMedians(rows, mappedAnyPrice, mappedCategory) {
+    if (!mappedAnyPrice || !mappedCategory) return {};
     var byCategory = {};
     rows.forEach(function (r) {
-      if (!r.category || !isFinite(r.price) || r.price <= 0) return;
+      if (!r.category || !isFinite(r.effectivePrice) || r.effectivePrice <= 0) return;
       if (!byCategory[r.category]) byCategory[r.category] = [];
-      byCategory[r.category].push(r.price);
+      byCategory[r.category].push(r.effectivePrice);
     });
     var medians = {};
     Object.keys(byCategory).forEach(function (cat) {
@@ -187,6 +197,7 @@
     Object.keys(mapping).forEach(function (k) { mapped[k] = !!mapping[k]; });
 
     var rows = buildNormalizedRows(data, mapping);
+    var mappedAnyPrice = mapped.price || mapped.salePrice;
 
     var skuDupes = mapped.sku
       ? global.CatalogueChecker.similarity.findExactDuplicateGroups(rows, function (r) { return r.sku.toLowerCase(); })
@@ -194,22 +205,40 @@
     var titleDupes = mapped.title
       ? global.CatalogueChecker.similarity.findExactDuplicateGroups(rows, function (r) { return r.title; })
       : new Map();
-    var categoryMedians = computeCategoryMedians(rows, mapped.price, mapped.category);
+    var categoryMedians = computeCategoryMedians(rows, mappedAnyPrice, mapped.category);
+
+    function distinctGroupCount(dupMap) {
+      var keys = new Set();
+      dupMap.forEach(function (v) { keys.add(v.key); });
+      return keys.size;
+    }
+    var skuDuplicateGroups = distinctGroupCount(skuDupes);
+    var titleDuplicateGroups = distinctGroupCount(titleDupes);
 
     var findings = [];
     var checkCounts = {};
 
-    function addFinding(row, checkId, message, value) {
+    function addFinding(row, checkId, message, value, groupKey) {
       findings.push({
         rowIndex: row.index,
         sku: row.sku,
         title: row.title,
+        category: row.category,
         checkId: checkId,
         severity: CHECKS[checkId].severity,
         message: message,
-        value: value
+        value: value,
+        groupKey: groupKey || null
       });
       checkCounts[checkId] = (checkCounts[checkId] || 0) + 1;
+    }
+
+    var categoryTotals = {};
+    if (mapped.category) {
+      rows.forEach(function (r) {
+        if (!r.category) return;
+        categoryTotals[r.category] = (categoryTotals[r.category] || 0) + 1;
+      });
     }
 
     function processRow(row) {
@@ -219,19 +248,22 @@
       if (mapped.title && !row.title) {
         addFinding(row, 'missing_title', 'Title is empty', '');
       }
-      if (mapped.price) {
-        if (row.priceRaw === '' || !isFinite(row.price) || row.price <= 0) {
-          addFinding(row, 'invalid_price', 'Price is missing, zero, negative or not a number', row.priceRaw);
+      if (mappedAnyPrice) {
+        if (row.effectivePriceRaw === '' || !isFinite(row.effectivePrice) || row.effectivePrice <= 0) {
+          addFinding(row, 'invalid_price', 'Price is missing, zero, negative or not a number', row.effectivePriceRaw);
         }
       }
       if (mapped.price && mapped.salePrice && row.salePriceRaw !== '' && isFinite(row.salePrice) && isFinite(row.price) && row.price > 0) {
-        if (row.salePrice > row.price) {
-          addFinding(row, 'inverted_sale_price', 'Sale price (' + row.salePriceRaw + ') is not lower than regular price (' + row.priceRaw + ')', row.salePriceRaw);
+        if (row.salePrice >= row.price) {
+          var priceMsg = row.salePrice > row.price
+            ? 'Sale price (' + row.salePriceRaw + ') is higher than regular price (' + row.priceRaw + ')'
+            : 'Sale price (' + row.salePriceRaw + ') equals regular price (' + row.priceRaw + ') — no actual discount';
+          addFinding(row, 'inverted_sale_price', priceMsg, row.salePriceRaw);
         }
       }
       if (mapped.sku && skuDupes.has(row.index)) {
         var skuGroup = skuDupes.get(row.index);
-        addFinding(row, 'duplicate_sku', 'SKU "' + row.sku + '" is used by ' + skuGroup.groupSize + ' products', row.sku);
+        addFinding(row, 'duplicate_sku', 'SKU "' + row.sku + '" is used by ' + skuGroup.groupSize + ' products', row.sku, 'sku:' + skuGroup.key);
       }
 
       if (mapped.description) {
@@ -243,7 +275,7 @@
         }
         if (descDupResult.rowGroups.has(row.index)) {
           var dg = descDupResult.rowGroups.get(row.index);
-          addFinding(row, 'duplicate_description', 'Matches ' + (dg.groupSize - 1) + ' other product(s) (group #' + dg.groupId + ', ~' + dg.bestMatchPercent + '% similar)', dg.bestMatchPercent + '%');
+          addFinding(row, 'duplicate_description', 'Matches ' + (dg.groupSize - 1) + ' other product(s) (group #' + dg.groupId + ', ~' + dg.bestMatchPercent + '% similar)', dg.bestMatchPercent + '%', 'desc:' + dg.groupId);
         }
       }
 
@@ -254,12 +286,12 @@
       if (mapped.title && row.title) {
         if (titleDupes.has(row.index)) {
           var tg = titleDupes.get(row.index);
-          addFinding(row, 'duplicate_title', 'Title matches ' + (tg.groupSize - 1) + ' other product(s) exactly', row.title);
+          addFinding(row, 'duplicate_title', 'Title matches ' + (tg.groupSize - 1) + ' other product(s) exactly', row.title, 'title:' + tg.key);
         }
         if (row.title.length > 70) {
           addFinding(row, 'title_too_long', 'Title is ' + row.title.length + ' characters (over 70)', row.title.length);
-        } else if (row.title.length < 20) {
-          addFinding(row, 'title_too_short', 'Title is only ' + row.title.length + ' characters (under 20)', row.title.length);
+        } else if (row.title.length < 10) {
+          addFinding(row, 'title_too_short', 'Title is only ' + row.title.length + ' characters (under 10)', row.title.length);
         }
       }
 
@@ -269,21 +301,21 @@
         }
       }
 
-      if (mapped.price && mapped.category && row.category && isFinite(row.price) && row.price > 0 && categoryMedians[row.category] != null) {
+      if (mappedAnyPrice && mapped.category && row.category && isFinite(row.effectivePrice) && row.effectivePrice > 0 && categoryMedians[row.category] != null) {
         var med = categoryMedians[row.category];
-        var ratio = row.price / med;
+        var ratio = row.effectivePrice / med;
         if (ratio >= 4 || ratio <= 0.25) {
           var comparison = ratio >= 1
             ? ratio.toFixed(1) + 'x higher than'
             : (1 / ratio).toFixed(1) + 'x lower than';
-          addFinding(row, 'suspicious_price', 'Price ' + row.priceRaw + ' is ' + comparison + ' the category median (' + med.toFixed(2) + ')', row.priceRaw);
+          addFinding(row, 'suspicious_price', 'Price ' + row.effectivePriceRaw + ' is ' + comparison + ' the category median (' + med.toFixed(2) + ')', row.effectivePriceRaw);
         }
       }
 
-      if (mapped.price && isFinite(row.price) && row.price > 0) {
-        var cents = Math.round((row.price - Math.floor(row.price)) * 100);
+      if (mappedAnyPrice && isFinite(row.effectivePrice) && row.effectivePrice > 0) {
+        var cents = Math.round((row.effectivePrice - Math.floor(row.effectivePrice)) * 100);
         if (COMMON_CENT_ENDINGS.indexOf(cents) === -1) {
-          addFinding(row, 'unrounded_price', 'Price ends in .' + (cents < 10 ? '0' + cents : cents), row.priceRaw);
+          addFinding(row, 'unrounded_price', 'Price ends in .' + (cents < 10 ? '0' + cents : cents), row.effectivePriceRaw);
         }
       }
     }
@@ -306,7 +338,10 @@
             findings: findings,
             checkCounts: checkCounts,
             totalProducts: rows.length,
-            descriptionDuplicateGroups: descDupResult.groupCount
+            descriptionDuplicateGroups: descDupResult.groupCount,
+            skuDuplicateGroups: skuDuplicateGroups,
+            titleDuplicateGroups: titleDuplicateGroups,
+            categoryTotals: categoryTotals
           });
         }
       }

@@ -41,11 +41,19 @@
     els.progressFill = document.getElementById('progress-fill');
     els.summaryHeadline = document.getElementById('summary-headline');
     els.summaryCards = document.getElementById('summary-cards');
+    els.scoreCard = document.getElementById('score-card');
+    els.scoreValue = document.getElementById('score-value');
+    els.scoreLabel = document.getElementById('score-label');
+    els.printBtn = document.getElementById('print-btn');
+    els.prioritiesList = document.getElementById('priorities-list');
+    els.categorySection = document.getElementById('category-section');
+    els.categoryList = document.getElementById('category-list');
     els.breakdownList = document.getElementById('breakdown-list');
     els.exportBtn = document.getElementById('export-btn');
     els.filterSeverity = document.getElementById('filter-severity');
     els.filterCheck = document.getElementById('filter-check');
     els.filterSearch = document.getElementById('filter-search');
+    els.groupSeverity = document.getElementById('group-severity');
     els.tableBody = document.getElementById('detail-table-body');
     els.pagination = document.getElementById('table-pagination');
     els.startOverBtn = document.getElementById('start-over-btn');
@@ -250,7 +258,10 @@
 
   function renderReport() {
     renderSummary();
+    renderScore();
+    renderPriorities();
     renderBreakdown();
+    renderCategoryBreakdown();
     populateCheckFilter();
     renderTable();
   }
@@ -284,6 +295,126 @@
     }).join('');
   }
 
+  // Weighted by how much of the catalogue each severity touches, not raw
+  // finding counts — a catalogue where every product has one medium issue
+  // is healthier than one where a third of products have a critical issue.
+  function computeHealthScore(sets, total) {
+    if (!total) return { score: 100, band: 'good' };
+    var criticalFrac = sets.critical.size / total;
+    var highFrac = sets.high.size / total;
+    var mediumFrac = sets.medium.size / total;
+    var penalty = Math.min(100, (criticalFrac * 60) + (highFrac * 30) + (mediumFrac * 15));
+    var score = Math.round(100 - penalty);
+    var band = score >= 80 ? 'good' : score >= 50 ? 'caution' : 'poor';
+    return { score: score, band: band };
+  }
+
+  function renderScore() {
+    var r = state.result;
+    var sets = affectedSets(r.findings);
+    var result = computeHealthScore(sets, r.totalProducts);
+    var labels = { good: 'Healthy catalogue', caution: 'Needs attention', poor: 'Urgent attention needed' };
+
+    els.scoreValue.textContent = result.score;
+    els.scoreLabel.textContent = labels[result.band];
+    els.scoreCard.className = 'score-card score-card--' + result.band;
+  }
+
+  function renderPriorities() {
+    var r = state.result;
+    var weight = { critical: 3, high: 2, medium: 1 };
+    var ids = Object.keys(r.checkCounts).filter(function (id) { return r.checkCounts[id] > 0; });
+    ids.sort(function (a, b) {
+      var scoreA = weight[CC.CHECKS[a].severity] * r.checkCounts[a];
+      var scoreB = weight[CC.CHECKS[b].severity] * r.checkCounts[b];
+      return scoreB - scoreA;
+    });
+    var top = ids.slice(0, 5);
+
+    if (!top.length) {
+      document.getElementById('priorities-section').hidden = true;
+      return;
+    }
+    document.getElementById('priorities-section').hidden = false;
+
+    els.prioritiesList.innerHTML = top.map(function (id) {
+      var check = CC.CHECKS[id];
+      var count = r.checkCounts[id];
+      return '<li class="priorities-list__item" data-check-id="' + id + '">' +
+        '<span class="severity-tag severity-tag--' + check.severity + '">' + check.severity + '</span>' +
+        '<span class="priorities-list__title">' + escapeHtml(check.title) + '</span>' +
+        '<span class="priorities-list__count">' + count.toLocaleString() + '</span>' +
+        '</li>';
+    }).join('');
+
+    els.prioritiesList.querySelectorAll('.priorities-list__item').forEach(function (li) {
+      li.addEventListener('click', function () {
+        els.filterCheck.value = li.dataset.checkId;
+        els.filterSeverity.value = '';
+        state.filters.checkId = li.dataset.checkId;
+        state.filters.severity = '';
+        state.page = 1;
+        renderTable();
+        document.querySelector('.table-wrap').scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
+    });
+  }
+
+  function renderCategoryBreakdown() {
+    var r = state.result;
+    var totals = r.categoryTotals || {};
+    var categories = Object.keys(totals);
+    if (!categories.length) {
+      els.categorySection.hidden = true;
+      return;
+    }
+
+    var affectedByCategory = {};
+    var seenRows = {};
+    r.findings.forEach(function (f) {
+      if (!f.category) return;
+      var key = f.category + '::' + f.rowIndex;
+      if (seenRows[key]) return;
+      seenRows[key] = true;
+      affectedByCategory[f.category] = (affectedByCategory[f.category] || 0) + 1;
+    });
+
+    // Categories smaller than 3 products are excluded from the ranking:
+    // a single flagged product in a 1-item category is trivially "100%
+    // affected" and would drown out categories with real, larger-scale
+    // problems (e.g. "6 of 12 Chairs" is more actionable than "1 of 1
+    // Storage"). Anything that small still shows up in the main table.
+    var rowsData = categories
+      .map(function (cat) {
+        return { category: cat, affected: affectedByCategory[cat] || 0, total: totals[cat] };
+      })
+      .filter(function (d) { return d.affected > 0 && d.total >= 3; })
+      .sort(function (a, b) { return (b.affected / b.total) - (a.affected / a.total); });
+
+    if (!rowsData.length) {
+      els.categorySection.hidden = true;
+      return;
+    }
+    els.categorySection.hidden = false;
+
+    var shown = rowsData.slice(0, 8);
+    var maxPct = Math.max.apply(null, shown.map(function (d) { return d.affected / d.total; }));
+
+    els.categoryList.innerHTML = shown.map(function (d) {
+      var pct = Math.round((d.affected / d.total) * 100);
+      var barPct = maxPct ? Math.round((d.affected / d.total) / maxPct * 100) : 0;
+      return '<div class="category-row">' +
+        '<div class="category-row__label">' + escapeHtml(d.category) + '</div>' +
+        '<div class="category-row__bar-track"><div class="category-row__bar" style="width:' + barPct + '%"></div></div>' +
+        '<div class="category-row__stat">' + d.affected + ' of ' + d.total + ' (' + pct + '%)</div>' +
+        '</div>';
+    }).join('');
+
+    if (rowsData.length > shown.length) {
+      els.categoryList.innerHTML += '<div class="category-row__more">+ ' + (rowsData.length - shown.length) + ' more categories</div>';
+    }
+  }
+
   function renderBreakdown() {
     var r = state.result;
     var ids = Object.keys(r.checkCounts).filter(function (id) { return r.checkCounts[id] > 0; });
@@ -299,10 +430,18 @@
       return;
     }
 
+    var groupCountByCheck = {
+      duplicate_description: r.descriptionDuplicateGroups,
+      duplicate_sku: r.skuDuplicateGroups,
+      duplicate_title: r.titleDuplicateGroups
+    };
+
     els.breakdownList.innerHTML = ids.map(function (id) {
       var check = CC.CHECKS[id];
       var count = r.checkCounts[id];
-      var extra = id === 'duplicate_description' ? ' across ' + r.descriptionDuplicateGroups + ' group(s)' : '';
+      var groupCount = groupCountByCheck[id];
+      var extra = groupCount ? ' across ' + groupCount + ' group(s)' : '';
+      var skuList = affectedSkusForCheck(id);
       return '<details class="breakdown-item" data-severity="' + check.severity + '">' +
         '<summary>' +
         '<span class="breakdown-item__badge">' + check.severity + '</span>' +
@@ -310,9 +449,27 @@
         '<span class="breakdown-item__count">' + count.toLocaleString() + extra + '</span>' +
         '<span class="breakdown-item__why">' + escapeHtml(truncate(check.explain, 90)) + '</span>' +
         '</summary>' +
-        '<div class="breakdown-item__body">' + escapeHtml(check.explain) + '</div>' +
+        '<div class="breakdown-item__body">' +
+        '<p>' + escapeHtml(check.explain) + '</p>' +
+        '<p class="breakdown-item__skus">' + escapeHtml(skuList) + '</p>' +
+        '</div>' +
         '</details>';
     }).join('');
+  }
+
+  function affectedSkusForCheck(checkId) {
+    var seen = new Set();
+    var list = [];
+    state.result.findings.forEach(function (f) {
+      if (f.checkId !== checkId) return;
+      var label = f.sku || f.title || '(no SKU)';
+      if (seen.has(label)) return;
+      seen.add(label);
+      list.push(label);
+    });
+    var shown = list.slice(0, 20);
+    var suffix = list.length > shown.length ? ' + ' + (list.length - shown.length) + ' more' : '';
+    return shown.join(' · ') + suffix;
   }
 
   function populateCheckFilter() {
@@ -339,7 +496,9 @@
       state.page = 1;
       renderTable();
     }, 200));
+    els.groupSeverity.addEventListener('change', function () { renderTable(); });
     els.exportBtn.addEventListener('click', exportCsv);
+    els.printBtn.addEventListener('click', printReport);
     els.startOverBtn.addEventListener('click', function () {
       state.headers = [];
       state.rows = [];
@@ -352,9 +511,11 @@
     });
   }
 
+  var SEVERITY_ORDER = { critical: 0, high: 1, medium: 2 };
+
   function getFilteredFindings() {
     var f = state.filters;
-    return state.result.findings.filter(function (row) {
+    var filtered = state.result.findings.filter(function (row) {
       if (f.severity && row.severity !== f.severity) return false;
       if (f.checkId && row.checkId !== f.checkId) return false;
       if (f.search) {
@@ -363,32 +524,90 @@
       }
       return true;
     });
+    // Stable sort: severity first (critical → high → medium), original
+    // order preserved within each severity so it still reads sensibly.
+    return filtered
+      .map(function (row, i) { return { row: row, i: i }; })
+      .sort(function (a, b) {
+        var d = SEVERITY_ORDER[a.row.severity] - SEVERITY_ORDER[b.row.severity];
+        return d !== 0 ? d : a.i - b.i;
+      })
+      .map(function (x) { return x.row; });
   }
 
-  function renderTable() {
+  // Findings that share a groupKey (duplicate SKU/title/description groups)
+  // collapse into a single display row on screen — a client seeing "12
+  // duplicate description rows" panics; seeing "1 row, 12 affected SKUs"
+  // reads the actual scope correctly. The CSV export stays ungrouped (one
+  // row per product) so every SKU is still individually actionable there.
+  function buildDisplayRows(findings) {
+    var rows = [];
+    var groupIndex = {};
+    findings.forEach(function (f) {
+      if (!f.groupKey) {
+        rows.push({ skus: [f.sku], titles: [f.title], message: f.message, severity: f.severity });
+        return;
+      }
+      if (groupIndex[f.groupKey] === undefined) {
+        groupIndex[f.groupKey] = rows.length;
+        rows.push({ skus: [], titles: [], message: f.message, severity: f.severity, memberCount: 0 });
+      }
+      var row = rows[groupIndex[f.groupKey]];
+      if (f.sku && row.skus.indexOf(f.sku) === -1) row.skus.push(f.sku);
+      if (f.title && row.titles.indexOf(f.title) === -1) row.titles.push(f.title);
+      row.memberCount++;
+    });
+    return rows;
+  }
+
+  function joinTruncated(list, max) {
+    if (!list.length) return '—';
+    var shown = list.slice(0, max);
+    var suffix = list.length > max ? ' +' + (list.length - max) + ' more' : '';
+    return shown.join(', ') + suffix;
+  }
+
+  var SEVERITY_HEADER_LABEL = { critical: 'Critical', high: 'High', medium: 'Medium' };
+
+  function renderTable(options) {
+    var forceAll = options && options.forceAll;
     var filtered = getFilteredFindings();
-    var totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+    var displayRows = buildDisplayRows(filtered);
+    var totalPages = Math.max(1, Math.ceil(displayRows.length / PAGE_SIZE));
     if (state.page > totalPages) state.page = totalPages;
-    var start = (state.page - 1) * PAGE_SIZE;
-    var pageRows = filtered.slice(start, start + PAGE_SIZE);
+    var start = forceAll ? 0 : (state.page - 1) * PAGE_SIZE;
+    var pageRows = forceAll ? displayRows : displayRows.slice(start, start + PAGE_SIZE);
+    var grouped = !!(els.groupSeverity && els.groupSeverity.checked);
 
     if (!pageRows.length) {
       els.tableBody.innerHTML = '<tr><td colspan="4" class="empty-state">No issues match these filters.</td></tr>';
     } else {
-      els.tableBody.innerHTML = pageRows.map(function (row) {
-        return '<tr>' +
-          '<td>' + escapeHtml(row.sku || '—') + '</td>' +
-          '<td>' + escapeHtml(truncate(row.title || '—', 60)) + '</td>' +
-          '<td>' + escapeHtml(row.message) + '</td>' +
+      var html = '';
+      var lastSeverity = null;
+      pageRows.forEach(function (row) {
+        if (grouped && row.severity !== lastSeverity) {
+          html += '<tr class="severity-header-row"><td colspan="4">' + SEVERITY_HEADER_LABEL[row.severity] + '</td></tr>';
+          lastSeverity = row.severity;
+        }
+        var skuText = joinTruncated(row.skus, 5);
+        var titleText = row.titles.length <= 1
+          ? truncate(row.titles[0] || '', 60) || '—'
+          : joinTruncated(row.titles.map(function (t) { return truncate(t, 40); }), 3);
+        var message = row.memberCount ? row.memberCount + ' products — ' + row.message : row.message;
+        html += '<tr>' +
+          '<td>' + escapeHtml(skuText) + '</td>' +
+          '<td>' + escapeHtml(titleText) + '</td>' +
+          '<td>' + escapeHtml(message) + '</td>' +
           '<td><span class="severity-tag severity-tag--' + row.severity + '">' + row.severity + '</span></td>' +
           '</tr>';
-      }).join('');
+      });
+      els.tableBody.innerHTML = html;
     }
 
     els.pagination.innerHTML = '';
-    if (filtered.length > PAGE_SIZE) {
+    if (!forceAll && displayRows.length > PAGE_SIZE) {
       var info = document.createElement('span');
-      info.textContent = 'Page ' + state.page + ' of ' + totalPages + ' (' + filtered.length.toLocaleString() + ' issues)';
+      info.textContent = 'Page ' + state.page + ' of ' + totalPages + ' (' + displayRows.length.toLocaleString() + ' rows)';
       var prev = document.createElement('button');
       prev.textContent = 'Previous';
       prev.disabled = state.page <= 1;
@@ -401,6 +620,26 @@
       els.pagination.appendChild(info);
       els.pagination.appendChild(next);
     }
+  }
+
+  function printReport() {
+    renderTable({ forceAll: true });
+    document.body.classList.add('is-printing');
+
+    var restored = false;
+    var fallbackTimer;
+    function restore() {
+      if (restored) return;
+      restored = true;
+      clearTimeout(fallbackTimer);
+      window.removeEventListener('afterprint', restore);
+      document.body.classList.remove('is-printing');
+      renderTable();
+    }
+    window.addEventListener('afterprint', restore);
+    window.print();
+    // Safari doesn't reliably fire afterprint in all cases — fall back to a timeout.
+    fallbackTimer = setTimeout(restore, 2000);
   }
 
   function exportCsv() {

@@ -91,21 +91,46 @@
     <section id="step-report" class="step" hidden>
 
       <div class="report-summary">
-        <div class="report-summary__headline" id="summary-headline"></div>
+        <div class="report-summary__top">
+          <div class="score-card" id="score-card">
+            <div class="score-card__value" id="score-value">–</div>
+            <div class="score-card__label" id="score-label">Catalogue health score</div>
+          </div>
+          <div class="report-summary__top-right">
+            <div class="report-summary__headline" id="summary-headline"></div>
+            <button id="print-btn" class="btn btn--ghost report-summary__print">Print / save as PDF</button>
+          </div>
+        </div>
         <div class="report-summary__cards" id="summary-cards"></div>
+      </div>
+
+      <div class="report-section" id="priorities-section">
+        <div class="report-section__header">
+          <h2>Where to start</h2>
+        </div>
+        <p class="step__lead">The five issues costing you the most, ranked by severity and how many products they affect. Click one to jump to those rows below.</p>
+        <ol id="priorities-list" class="priorities-list"></ol>
       </div>
 
       <div class="report-section">
         <div class="report-section__header">
           <h2>Findings by check</h2>
-          <button id="export-btn" class="btn btn--primary">Download full findings (CSV)</button>
         </div>
         <div id="breakdown-list" class="breakdown-list"></div>
+      </div>
+
+      <div class="report-section" id="category-section" hidden>
+        <div class="report-section__header">
+          <h2>Issues by category</h2>
+        </div>
+        <p class="step__lead">Where problems concentrate in your catalogue.</p>
+        <div id="category-list" class="category-list"></div>
       </div>
 
       <div class="report-section">
         <div class="report-section__header">
           <h2>All issues</h2>
+          <button id="export-btn" class="btn btn--primary">Download full findings (CSV)</button>
         </div>
         <div class="table-filters">
           <label>Severity
@@ -121,6 +146,10 @@
           </label>
           <label class="table-filters__search">Search
             <input type="text" id="filter-search" placeholder="SKU or title…">
+          </label>
+          <label class="table-filters__checkbox">
+            <input type="checkbox" id="group-severity" checked>
+            Group by severity
           </label>
         </div>
         <div class="table-wrap">

@@ -60,18 +60,24 @@
     if (ra !== rb) this.parent[ra] = rb;
   };
 
-  // Bucket key: category + length band + the description's opening 3 words.
-  // Real near-duplicates (copy-pasted variant descriptions with one word
-  // swapped) always share the same opening, so this loses no real matches
-  // while keeping buckets small when a catalogue has many unrelated
-  // products crammed into a single category — the case that otherwise
-  // blows up into millions of pairwise comparisons.
+  // Bucket key: length band + the description's opening 3 words. Real
+  // near-duplicates (copy-pasted variant descriptions with one word
+  // swapped, or boilerplate reused across unrelated products) always share
+  // the same opening, so this loses no real matches while keeping buckets
+  // small when a catalogue has many unrelated products crammed together —
+  // the case that otherwise blows up into millions of pairwise comparisons.
+  //
+  // Category is deliberately NOT part of this key. The most commercially
+  // damaging duplicate-content case is boilerplate copy reused across
+  // *different* categories (e.g. the same generic paragraph pasted onto a
+  // cable, a charger and a phone mount) — partitioning by category would
+  // silently exclude exactly that case from ever being compared.
   function bucketKeyFor(r) {
     var norm = normalizeText(r.description);
     var words = norm.split(' ').filter(Boolean);
     var lenBand = Math.floor(words.length / 8);
     var prefix = words.slice(0, 3).join(' ');
-    return (r.category || '').toLowerCase().trim() + '::' + lenBand + '::' + prefix;
+    return lenBand + '::' + prefix;
   }
 
   // rows: array of { index, category, description }
@@ -82,6 +88,28 @@
     var threshold = thresholdPercent / 100;
     var candidates = rows.filter(function (r) { return wordCount(r.description) > 0; });
 
+    var uf = new UnionFind(rows.length);
+    var bestMatch = {};
+
+    // Exact-match pass first: byte-identical descriptions (after
+    // normalisation) are unioned unconditionally, regardless of bucketing
+    // or threshold. This guarantees the worst case — boilerplate copied
+    // verbatim across the catalogue — is never missed.
+    var exactGroups = {};
+    candidates.forEach(function (r) {
+      var norm = normalizeText(r.description);
+      if (!exactGroups[norm]) exactGroups[norm] = [];
+      exactGroups[norm].push(r);
+    });
+    Object.keys(exactGroups).forEach(function (norm) {
+      var members = exactGroups[norm];
+      if (members.length < 2) return;
+      for (var m = 1; m < members.length; m++) {
+        uf.union(members[0].index, members[m].index);
+      }
+      members.forEach(function (r) { bestMatch[r.index] = 100; });
+    });
+
     var buckets = {};
     candidates.forEach(function (r) {
       var key = bucketKeyFor(r);
@@ -91,8 +119,6 @@
     var bucketList = Object.keys(buckets).map(function (k) { return buckets[k]; }).filter(function (b) { return b.length > 1; });
     var totalPairs = bucketList.reduce(function (sum, b) { return sum + (b.length * (b.length - 1)) / 2; }, 0);
 
-    var uf = new UnionFind(rows.length);
-    var bestMatch = {};
     var shingleCache = {};
     function shinglesFor(r) {
       if (!shingleCache[r.index]) shingleCache[r.index] = wordShingles(r.description, 3);
