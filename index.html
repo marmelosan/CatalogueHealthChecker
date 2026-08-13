@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Catalogue Health Checker</title>
+  <meta name="description" content="Upload a product CSV and get a prioritised report of catalogue data issues. Runs entirely in your browser — nothing is uploaded.">
+  <link rel="stylesheet" href="./css/app.css">
+</head>
+<body>
+
+  <div class="privacy-banner">
+    <svg class="privacy-banner__icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+      <rect x="4" y="11" width="16" height="9" rx="2"></rect>
+      <path d="M8 11V7a4 4 0 0 1 8 0v4"></path>
+    </svg>
+    <span>Everything happens on your computer. Your file is never uploaded, stored, or sent anywhere.</span>
+  </div>
+
+  <header class="site-header">
+    <div class="site-header__inner">
+      <span class="site-header__title">Catalogue Health Checker</span>
+      <span class="site-header__subtitle">A free tool by Sandro Marmelo</span>
+    </div>
+  </header>
+
+  <main class="page">
+
+    <!-- STEP 1: intro + upload -->
+    <section id="step-upload" class="step">
+      <div class="intro">
+        <h1>Find what's costing you sales in your product catalogue</h1>
+        <p class="intro__lead">
+          Upload a CSV export of your product catalogue and get back a prioritised list of missing images,
+          broken prices, thin descriptions, duplicate content and other issues quietly costing you conversions —
+          ranked by commercial impact, not just technical severity.
+        </p>
+        <ul class="intro__points">
+          <li>Works with Shopify, WooCommerce, PrestaShop and most other CSV exports</li>
+          <li>Handles catalogues up to 20,000 products</li>
+          <li>Nothing leaves your browser — no upload, no account, no tracking</li>
+        </ul>
+      </div>
+
+      <div id="dropzone" class="dropzone" tabindex="0" role="button" aria-label="Upload CSV file">
+        <input type="file" id="file-input" accept=".csv,text/csv" hidden>
+        <svg viewBox="0 0 24 24" width="40" height="40" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+          <path d="M12 16V4M12 4l-4 4M12 4l4 4"></path>
+          <path d="M4 16v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"></path>
+        </svg>
+        <p class="dropzone__title">Drag and drop your product CSV here</p>
+        <p class="dropzone__sub">or click to browse — .csv files only</p>
+      </div>
+
+      <div id="upload-error" class="alert alert--error" hidden></div>
+    </section>
+
+    <!-- STEP 2: column mapping -->
+    <section id="step-mapping" class="step" hidden>
+      <h2>Map your columns</h2>
+      <p class="step__lead">We've matched what we could recognise automatically. Check each one and correct anything that's wrong before analysing.</p>
+
+      <div id="mapping-table" class="mapping-table"></div>
+
+      <div class="mapping-options">
+        <label for="similarity-threshold">
+          Duplicate description sensitivity
+          <span class="mapping-options__hint">Descriptions this similar or more are flagged as duplicates. Lower catches more, but risks flagging legitimately similar variant copy.</span>
+        </label>
+        <div class="mapping-options__control">
+          <input type="range" id="similarity-threshold" min="70" max="100" value="90">
+          <span id="similarity-threshold-value">90%</span>
+        </div>
+      </div>
+
+      <div class="step__actions">
+        <button id="back-to-upload" class="btn btn--ghost" type="button">Back</button>
+        <button id="analyse-btn" class="btn btn--primary" type="button">Analyse catalogue</button>
+      </div>
+    </section>
+
+    <!-- STEP 3: progress -->
+    <section id="step-progress" class="step" hidden>
+      <div class="progress-panel">
+        <p id="progress-label">Parsing file…</p>
+        <div class="progress-bar"><div id="progress-fill" class="progress-bar__fill"></div></div>
+      </div>
+    </section>
+
+    <!-- STEP 4: report -->
+    <section id="step-report" class="step" hidden>
+
+      <div class="report-summary">
+        <div class="report-summary__headline" id="summary-headline"></div>
+        <div class="report-summary__cards" id="summary-cards"></div>
+      </div>
+
+      <div class="report-section">
+        <div class="report-section__header">
+          <h2>Findings by check</h2>
+          <button id="export-btn" class="btn btn--primary">Download full findings (CSV)</button>
+        </div>
+        <div id="breakdown-list" class="breakdown-list"></div>
+      </div>
+
+      <div class="report-section">
+        <div class="report-section__header">
+          <h2>All issues</h2>
+        </div>
+        <div class="table-filters">
+          <label>Severity
+            <select id="filter-severity">
+              <option value="">All</option>
+              <option value="critical">Critical</option>
+              <option value="high">High</option>
+              <option value="medium">Medium</option>
+            </select>
+          </label>
+          <label>Check
+            <select id="filter-check"><option value="">All</option></select>
+          </label>
+          <label class="table-filters__search">Search
+            <input type="text" id="filter-search" placeholder="SKU or title…">
+          </label>
+        </div>
+        <div class="table-wrap">
+          <table id="detail-table" class="detail-table">
+            <thead>
+              <tr><th>SKU</th><th>Title</th><th>Issue</th><th>Severity</th></tr>
+            </thead>
+            <tbody id="detail-table-body"></tbody>
+          </table>
+        </div>
+        <div id="table-pagination" class="table-pagination"></div>
+      </div>
+
+      <div class="step__actions">
+        <button id="start-over-btn" class="btn btn--ghost" type="button">Analyse another file</button>
+      </div>
+    </section>
+
+  </main>
+
+  <footer class="site-footer">
+    <p>Built by <a href="../index.html">Sandro Marmelo</a> — no data ever leaves your browser.</p>
+  </footer>
+
+  <script src="./js/vendor/papaparse.min.js"></script>
+  <script src="./js/fields.js"></script>
+  <script src="./js/similarity.js"></script>
+  <script src="./js/checks.js"></script>
+  <script src="./js/app.js"></script>
+</body>
+</html>
