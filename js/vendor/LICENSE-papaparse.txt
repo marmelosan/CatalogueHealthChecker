@@ -1,0 +1,2 @@
+papaparse.min.js is bundled unmodified from the "papaparse" npm package (v5.4.1), MIT License.
+https://github.com/mholt/PapaParse
