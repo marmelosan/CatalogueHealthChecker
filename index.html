@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Catalogue Cleaner for Shopify</title>
-  <meta name="description" content="Upload a supplier product CSV and download it cleaned and ready to import into Shopify. Runs entirely in your browser — nothing is uploaded.">
+  <title>Catalogue Health Checker</title>
+  <meta name="description" content="Upload a product CSV and get a prioritised report of catalogue data issues. Runs entirely in your browser — nothing is uploaded.">
   <link rel="stylesheet" href="./css/app.css">
 </head>
 <body>
@@ -19,7 +19,7 @@
 
   <header class="site-header">
     <div class="site-header__inner">
-      <span class="site-header__title">Catalogue Cleaner for Shopify</span>
+      <span class="site-header__title">Catalogue Health Checker</span>
       <span class="site-header__subtitle">A free tool by Sandro Marmelo</span>
     </div>
   </header>
@@ -29,16 +29,16 @@
     <!-- STEP 1: intro + upload -->
     <section id="step-upload" class="step">
       <div class="intro">
-        <h1>Turn a messy supplier CSV into a ready-to-import Shopify file</h1>
+        <h1>Find what's costing you sales in your product catalogue</h1>
         <p class="intro__lead">
-          Upload the product list your supplier sent you and get back a cleaned CSV in Shopify's
-          import format — whitespace stripped, prices normalised, valid handles generated, and
-          anything that needs a second look clearly flagged, never silently dropped.
+          Upload a CSV export of your product catalogue and get back a prioritised list of missing images,
+          broken prices, thin descriptions, duplicate content and other issues quietly costing you conversions —
+          ranked by commercial impact, not just technical severity.
         </p>
         <ul class="intro__points">
-          <li>Free, no sign-up, no account, no limit on file size</li>
-          <li>Built for Shopify's product import format</li>
-          <li>Nothing leaves your browser — no upload, no tracking</li>
+          <li>Works with Shopify, WooCommerce, PrestaShop and most other CSV exports</li>
+          <li>Handles catalogues up to 20,000 products</li>
+          <li>Nothing leaves your browser — no upload, no account, no tracking</li>
         </ul>
       </div>
 
@@ -48,7 +48,7 @@
           <path d="M12 16V4M12 4l-4 4M12 4l4 4"></path>
           <path d="M4 16v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"></path>
         </svg>
-        <p class="dropzone__title">Drag and drop your supplier CSV here</p>
+        <p class="dropzone__title">Drag and drop your product CSV here</p>
         <p class="dropzone__sub">or click to browse — .csv files only</p>
       </div>
 
@@ -58,75 +58,133 @@
     <!-- STEP 2: column mapping -->
     <section id="step-mapping" class="step" hidden>
       <h2>Map your columns</h2>
-      <p class="step__lead">We've matched what we could recognise automatically. Check each one and correct anything that's wrong before cleaning.</p>
-
-      <div id="price-warning" class="alert alert--warning" hidden></div>
+      <p class="step__lead">We've matched what we could recognise automatically. Check each one and correct anything that's wrong before analysing.</p>
 
       <div id="mapping-table" class="mapping-table"></div>
 
-      <div id="mapping-error" class="alert alert--error" hidden></div>
-
-      <div class="info-box">
-        <p>The exported file also fills in a few columns Shopify needs but your supplier's file
-        won't have: <strong>Option1 Name / Value</strong> (set to "Title" / "Default Title" for
-        simple, single-variant products) and <strong>Variant Inventory Tracker / Policy</strong>
-        (set so the stock quantities you map actually get applied). A <strong>Needs Review</strong>
-        column is added at the end to flag rows worth a manual look — Shopify ignores columns it
-        doesn't recognise, so it won't affect the import.</p>
+      <div class="mapping-options">
+        <label for="similarity-threshold">
+          Duplicate description sensitivity
+          <span class="mapping-options__hint">Descriptions this similar or more are flagged as duplicates. Lower catches more, but risks flagging legitimately similar variant copy.</span>
+        </label>
+        <div class="mapping-options__control">
+          <input type="range" id="similarity-threshold" min="70" max="100" value="90">
+          <span id="similarity-threshold-value">90%</span>
+        </div>
       </div>
 
       <div class="step__actions">
         <button id="back-to-upload" class="btn btn--ghost" type="button">Back</button>
-        <button id="clean-btn" class="btn btn--primary" type="button">Clean catalogue</button>
+        <button id="analyse-btn" class="btn btn--primary" type="button">Analyse catalogue</button>
       </div>
     </section>
 
     <!-- STEP 3: progress -->
     <section id="step-progress" class="step" hidden>
       <div class="progress-panel">
-        <p id="progress-label">Reading file…</p>
+        <p id="progress-label">Parsing file…</p>
         <div class="progress-bar"><div id="progress-fill" class="progress-bar__fill"></div></div>
       </div>
     </section>
 
-    <!-- STEP 4: results -->
-    <section id="step-results" class="step" hidden>
+    <!-- STEP 4: report -->
+    <section id="step-report" class="step" hidden>
 
-      <div id="results-summary" class="results-summary"></div>
+      <div class="report-summary">
+        <div class="report-summary__top">
+          <div class="score-card" id="score-card">
+            <div class="score-card__value" id="score-value">–</div>
+            <div class="score-card__label" id="score-label">Catalogue health score</div>
+          </div>
+          <div class="report-summary__top-right">
+            <div class="report-summary__headline" id="summary-headline"></div>
+            <button id="print-btn" class="btn btn--ghost report-summary__print">Print / save as PDF</button>
+          </div>
+        </div>
+        <div class="report-summary__cards" id="summary-cards"></div>
+      </div>
+
+      <div class="report-section" id="priorities-section">
+        <div class="report-section__header">
+          <h2>Where to start</h2>
+        </div>
+        <p class="step__lead">The five issues costing you the most, ranked by severity and how many products they affect. Click one to jump to those rows below.</p>
+        <ol id="priorities-list" class="priorities-list"></ol>
+      </div>
 
       <div class="report-section">
         <div class="report-section__header">
-          <h2>Flagged for manual review</h2>
+          <h2>Findings by check</h2>
         </div>
-        <p class="step__lead">These rows are included in the export, marked in the "Needs Review" and "Review Notes" columns — nothing is ever silently dropped.</p>
-        <div id="flag-list" class="flag-list"></div>
+        <div id="breakdown-list" class="breakdown-list"></div>
       </div>
 
-      <div class="download-panel">
-        <button id="download-btn" class="btn btn--primary" type="button">Download cleaned CSV</button>
-        <p style="margin-top:10px;font-size:13px;color:var(--text-muted)">Ready to import: in your Shopify admin, go to Products → Import.</p>
-        <!-- TODO: replace with your real Ko-fi / Buy Me a Coffee URL before publishing -->
-        <a class="support-link" href="https://ko-fi.com/REPLACE_ME" target="_blank" rel="noopener">
-          ☕ If this saved you time, you can buy me a coffee
-        </a>
+      <div class="report-section" id="category-section" hidden>
+        <div class="report-section__header">
+          <h2>Issues by category</h2>
+        </div>
+        <p class="step__lead">Where problems concentrate in your catalogue.</p>
+        <div id="category-list" class="category-list"></div>
+      </div>
+
+      <div class="report-section">
+        <div class="report-section__header">
+          <h2>All issues</h2>
+          <button id="export-btn" class="btn btn--primary">Download full findings (CSV)</button>
+        </div>
+        <div class="table-filters">
+          <label>Severity
+            <select id="filter-severity">
+              <option value="">All</option>
+              <option value="critical">Critical</option>
+              <option value="high">High</option>
+              <option value="medium">Medium</option>
+            </select>
+          </label>
+          <label>Check
+            <select id="filter-check"><option value="">All</option></select>
+          </label>
+          <label class="table-filters__search">Search
+            <input type="text" id="filter-search" placeholder="SKU or title…">
+          </label>
+          <label class="table-filters__checkbox">
+            <input type="checkbox" id="group-severity" checked>
+            Group by severity
+          </label>
+        </div>
+        <div class="table-wrap">
+          <table id="detail-table" class="detail-table">
+            <thead>
+              <tr><th>SKU</th><th>Title</th><th>Issue</th><th>Severity</th></tr>
+            </thead>
+            <tbody id="detail-table-body"></tbody>
+          </table>
+        </div>
+        <div id="table-pagination" class="table-pagination"></div>
+      </div>
+
+      <div class="cta-section">
+        <h3>These are the issues. The harder question is which ones to fix first.</h3>
+        <p>This tool catches what's mechanically wrong — empty fields, duplicates, broken pricing. What it can't tell you is which of these are actually costing you sales, or what's wrong that no rule can detect: cross-sell logic recommending the product already in the cart, tracking that silently stopped reporting, pricing that's technically valid but commercially wrong.</p>
+        <p>If you'd like someone to look at the full picture and tell you what to prioritise, get in touch.</p>
+        <a id="cta-link" class="btn btn--primary" href="#">Get in touch</a>
       </div>
 
       <div class="step__actions">
-        <button id="start-over-btn" class="btn btn--ghost" type="button">Clean another file</button>
+        <button id="start-over-btn" class="btn btn--ghost" type="button">Analyse another file</button>
       </div>
     </section>
 
   </main>
 
   <footer class="site-footer">
-    <p>Built by Sandro Marmelo — no data ever leaves your browser.</p>
+    <p>Built by <a href="../index.html">Sandro Marmelo</a> — no data ever leaves your browser.</p>
   </footer>
 
   <script src="./js/vendor/papaparse.min.js"></script>
-  <script src="./js/shopify-fields.js"></script>
-  <script src="./js/duplicates.js"></script>
-  <script src="./js/price.js"></script>
-  <script src="./js/cleaner.js"></script>
+  <script src="./js/fields.js"></script>
+  <script src="./js/similarity.js"></script>
+  <script src="./js/checks.js"></script>
   <script src="./js/app.js"></script>
 </body>
 </html>
